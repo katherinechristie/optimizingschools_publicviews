@@ -1,0 +1,506 @@
+---
+title: "optschools_publicviews.Rmd"
+author: "Rebecca Johnson (raj2@princeton.edu)"
+date: "8/20/2019"
+output: html_document
+---
+
+## Load packages
+
+
+```{r}
+
+library(xlsx)
+library(dplyr)
+library(stringr)
+library(haven)
+library(ggplot2)
+library(fiftystater)
+library(tidyverse)
+library(data.table)
+library(viridis)
+library(skimr)
+
+theme_new <- function(base_size = 16, base_family = "Helvetica"){
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      panel.grid = element_blank(),   
+      panel.border = element_rect(fill = NA, colour = "black", size=1),
+      panel.background = element_rect(fill = "white", colour = "black"), 
+      strip.background = element_rect(fill = NA),
+      axis.text.x = element_text(color = "black"),
+      axis.text.y = element_text(color = "black")
+    )
+}
+
+
+```
+
+
+## Load and clean data
+
+```{r}
+raw_data= read.csv("../data/Resource_allocation_vignettes_August 21, 2019_12.20.csv")
+
+## first row for colnames
+raw_colnames = raw_data[1, ]
+raw_data_removenames = copy(raw_data[3:nrow(raw_data), ])
+
+## load the new data
+raw_data_new = read.csv("../data/resource_allocation_predictiveonly_October 24, 2019_08.46.csv")
+raw_colnames_new = raw_data_new[2, ]
+raw_data_new_removenames = copy(raw_data_new[3:nrow(raw_data_new),])
+
+## subset to demographics and likert scale
+old_names_new = c("Q129",
+  "Q136",
+                  "Q137",
+                    "Q138",
+                  "Q139")
+new_names_new = c("continuous_algofair",
+                  "highest_educ",
+             "gender",
+             "schoolage_kids",
+             "pol_ideology")
+
+## filter out test obs
+raw_data_nontest = raw_data_removenames %>%
+              filter(Status != "Survey Test")
+
+old_names = c("Q134",
+              "method_fair",
+              "Q132",
+              "Q131",
+              "Q127",
+              "Q129",
+              "Q135",
+              "Q136",
+              "Q137",
+              "Q138",
+              "Q139",
+              "Q140")
+
+new_names = c("comprehension",
+              "binary_morefair",
+              "explain_fairness",
+              "deserve",
+              "continuous_nonalgofair",
+              "continuous_algofair",
+              "parent_input",
+              "highest_educ",
+             "gender",
+             "schoolage_kids",
+             "pol_ideology",
+             "zipcode_map")
+
+## update names
+setnames(raw_data_nontest, old_names, new_names)
+setnames(raw_data_new_removenames, old_names_new, new_names_new)
+
+## create function to recode likert values
+
+
+analytic_df = raw_data_nontest %>%
+          filter(explain_fairness != "test")  %>% mutate(continuous_algofair_numeric = 
+                              case_when(continuous_algofair == "Extremely unfair" ~ 1,
+                                        continuous_algofair == "Somewhat unfair" ~ 2,
+                                        continuous_algofair == "Neither fair nor unfair" ~ 3,
+                                        continuous_algofair == "Somewhat fair" ~ 4,
+                                        continuous_algofair == "Extremely fair" ~ 5),
+                              continuous_nonalgofair_numeric = 
+                              case_when(continuous_nonalgofair == "Extremely unfair" ~ 1,
+                                        continuous_nonalgofair == "Somewhat unfair" ~ 2,
+                                        continuous_nonalgofair == "Neither fair nor unfair" ~ 3,
+                                        continuous_nonalgofair == "Somewhat fair" ~ 4,
+                                        continuous_nonalgofair == "Extremely fair" ~ 5),
+                              method_short = 
+                            case_when(grepl("randomly", nonalg_method_present) ~ "Lottery",
+                                      grepl("parents", nonalg_method_present)  ~ "Parent\nrequests",
+                                      grepl("judgment", nonalg_method_present) ~ "Counselor\njudgment",
+                                      grepl("income", nonalg_method_present) ~ "Guidelines\n(income threshold)"))  
+
+
+analytic_df_new = raw_data_new_removenames %>%
+          mutate(continuous_algofair_numeric = 
+                              case_when(continuous_algofair == "Extremely unfair" ~ 1,
+                                        continuous_algofair == "Somewhat unfair" ~ 2,
+                                        continuous_algofair == "Neither fair nor unfair" ~ 3,
+                                        continuous_algofair == "Somewhat fair" ~ 4,
+                                        continuous_algofair == "Extremely fair" ~ 5)) 
+
+
+```
+
+
+## Summarize descriptive stats
+
+
+```{r}
+dem_vars = c("highest_educ", "gender", "schoolage_kids",
+             "pol_ideology")
+
+old_dem = analytic_df[, dem_vars]
+new_dem = analytic_df_new[, dem_vars]
+
+
+combined_dem = rbind.data.frame(old_dem,
+                                new_dem)
+nrow(combined_dem)
+
+dem_summary = skim(combined_dem) %>%
+          filter(stat == "top_counts") %>%
+          dplyr::select(variable, level, value) 
+library(xtable)
+print(xtable(dem_summary), include.rownames = FALSE)
+mean(analytic_df$age_numeric, na.rm = TRUE)
+
+ggplot(analytic_df, aes(x = age_numeric)) +
+  geom_density() 
+sd(analytic_df$age_numeric)
+
+
+```
+
+## Compare presented with versus presented against
+
+
+```{r}
+old_likert = analytic_df %>%
+      dplyr::select(continuous_algofair,
+                    continuous_algofair_numeric) %>%
+    mutate(version = "Contrasted\nwith other\nmethods")
+
+new_likert = analytic_df_new %>%
+    dplyr::select(continuous_algofair,
+                  continuous_algofair_numeric) %>%
+    mutate(version = "Not contrasted\nwith other\nmethods")
+
+both_likert = rbind.data.frame(old_likert,
+                               new_likert) %>%
+            mutate(contrast = ifelse(grepl("Not",
+                              version), 0, 1))
+
+
+summary(lm(continuous_algofair_numeric ~ 
+            contrast, data = both_likert))
+
+## create n per condition
+n_per_fair = both_likert %>%
+        group_by(continuous_algofair,
+                 version) %>%
+        dplyr::summarise(count_fair = n()) %>%
+        left_join(both_likert %>%
+            group_by(version) %>%
+            dplyr::summarise(count_survey = n())) %>%
+        mutate(prop_fair = count_fair/count_survey,
+               rating_ordered = factor(continuous_algofair,
+                                  levels = c("Extremely unfair", 
+                                             "Somewhat unfair",
+                                             "Neither fair nor unfair",
+                                             "Somewhat fair", 
+                                             "Extremely fair"),
+                                  ordered = TRUE))
+
+ggplot(n_per_fair, 
+    aes(x = rating_ordered, y= prop_fair,
+        group = version, 
+        fill = version)) +
+  geom_bar(stat = "identity",
+           position = "dodge") +
+  theme_new(base_size = 24) +
+  scale_fill_manual(values = c("darkgreen", "cyan")) +
+  ylab("Proportion of respondents\nwho choose category") +
+  coord_flip() +
+  labs(fill = "") +
+  xlab("") +
+  theme(legend.position = c(0.75, 0.25),
+        legend.background = element_blank())
+
+
+## save output
+ggsave("../output/contrast_results.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 12,
+       height = 8)
+
+
+
+
+```
+
+
+## Binary measures: fairness relative to others
+
+### Variation by comparator method
+
+
+```{r}
+analytic_df = analytic_df %>%
+      mutate(binary_morefair_descriptive = ifelse(binary_morefair == "school counselor using a predictive model/algorithm", 
+                                                  "Algorithm",
+                                                  "Other method"),
+             algorithm_morefair = ifelse(binary_morefair_descriptive == "Algorithm", 1, 0))  
+
+pairwise_fair = analytic_df %>%
+          group_by(method_short,
+                   binary_morefair_descriptive) %>%
+          dplyr::summarise(count = n()) %>%
+          ungroup() %>%
+          left_join(analytic_df %>% group_by(method_short) %>%
+                          dplyr::summarise(count_method = n()),
+                    on = "method_short") %>%
+          mutate(prop_method = count/count_method,
+                 prop_method_rounded = round(prop_method, 2))
+head(pairwise_fair)
+## plot the results
+ggplot(pairwise_fair, aes(x = factor(method_short), y = prop_method, 
+                          fill = binary_morefair_descriptive,
+                          group = binary_morefair_descriptive)) +
+  geom_bar(stat = "identity", position = "dodge",
+           alpha = 0.7) +
+  theme_new(base_size = 24) +
+  scale_fill_manual(values = c("firebrick", "wheat4")) +
+  geom_label(aes(x = factor(method_short), y = prop_method,
+                label = prop_method_rounded),
+            position = position_dodge(width = 1), size = 6,
+            fill = "white") +
+  ylab("Proportion of respondents\nwho think method\nis more fair") +
+  ylim(0, 1) +
+  coord_flip() +
+  labs(fill = "") +
+  xlab("") +
+  theme(legend.position = c(0.75, 0.95),
+        legend.background = element_blank())
+
+## save output
+ggsave("../output/binary_comparison.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 12,
+       height = 8)
+
+
+```
+
+
+### Variation by trigger 
+
+
+```{r}
+pairwise_budget_fair = analytic_df %>%
+          group_by(budget,
+                   binary_morefair_descriptive,
+                   method_short) %>%
+          summarise(count = n()) %>%
+          ungroup() %>%
+          left_join(analytic_df %>% group_by(budget, method_short) %>%
+                          summarise(count_condition = n()),
+                    on = c("method_short", "budget")) %>%
+          mutate(prop_condition = count/count_condition,
+                 prop_condition_rounded = round(prop_condition, 2))
+
+
+ggplot(pairwise_budget_fair, aes(x = factor(method_short), y = prop_condition, 
+                          fill = binary_morefair_descriptive)) +
+  geom_bar(stat = "identity", position = "dodge",
+           alpha = 0.7) +
+  theme_new(base_size = 24) +
+  scale_fill_manual(values = c("firebrick", "wheat4")) +
+  geom_text(aes(x = factor(method_short), y = prop_condition,
+                label = prop_condition_rounded),
+            position = position_dodge(width = 1), size = 6) +
+  ylab("Proportion of respondents\nwho think method\nis more fair") +
+  facet_wrap(~factor(budget, 
+                levels = c("smaller budget", 
+                           "larger budget"),
+                labels = c("Why switch?\nSmaller budget",
+                           "Why switch?\nLarger budget")), ncol = 1) +
+  coord_flip() +
+  labs(fill = "") +
+  xlab("") +
+  theme(legend.position = c(0.85, 0.98),
+        legend.background = element_blank(),
+        legend.text=element_text(size=14))
+
+ggsave("../output/binary_comparison_bybudget.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8,
+       height = 12)
+
+
+```
+
+
+### Regression model of results
+
+
+```{r}
+formula_nocontrols = formula(sprintf("%s ~ %s  + %s", "algorithm_morefair",
+                                     "method_short", 
+                                     "budget"))
+
+analytic_df = analytic_df %>% mutate(method_short = relevel(factor(method_short), 
+                                                  ref = "Guidelines\n(income threshold)"))
+analytic_pairwise_reg = glm(formula_nocontrols, data = analytic_df,
+                            family = "binomial")
+
+## clean up control variables
+analytic_df = analytic_df %>% mutate(age_numeric = as.numeric(age))
+controls = c("age_numeric", "highest_educ", "gender", "schoolage_kids", "pol_ideology")
+formula_wcontrols = formula(sprintf("%s ~ %s *%s + %s", "algorithm_morefair",
+                                     "method_short", 
+                                     "budget",
+                                    paste(controls,
+                                          collapse = "+")))
+
+analytic_pairwise_reg_wcontrols = glm(formula_wcontrols, data = analytic_df,
+                            family = "binomial")
+
+## plot se's and standard errors
+analytic_pairwise_reg_coef = data.frame(variable = 
+                      names(summary(analytic_pairwise_reg)$coefficients[, "Estimate"]),
+                      estimate = 
+                      summary(analytic_pairwise_reg)$coefficients[, "Estimate"],
+                      se = summary(analytic_pairwise_reg)$coefficients[, "Std. Error"]) %>%
+            filter(grepl("Intercept",
+                         variable) == FALSE) %>%
+            mutate(var_clean_1 = gsub("method\\_short|^budget", "",
+                                    variable),
+                   var_clean_2 = gsub("\\:budget", " x ", 
+                                      var_clean_1),
+                   var_clean_3 = ifelse(var_clean_2 != "smaller budget",
+                                  sprintf("%s\n(ref: guidelines)", var_clean_2),
+                                  sprintf("%s\n(ref: larger budget)", var_clean_2)),
+                   lower = estimate - 1.96*se,
+                   upper = estimate + 1.96*se)
+
+ggplot(analytic_pairwise_reg_coef, aes(x = factor(var_clean_3), 
+                                       y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  theme_new(base_size = 24) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  xlab("Effect of condition\non choosing algorithm as more fair\n(positive = leads respondents to view algorithm as fairer\nthan other method)") +
+  ylab("Coefficient and 95% CI\n(logistic regression)") +
+  coord_flip() 
+
+ggsave("../output/binary_comparison_logit.pdf",
+       plot = last_plot(),
+       device = "pdf",
+       width = 8,
+       height = 12)
+
+
+
+
+
+```
+
+
+### Continuous results
+
+
+```{r}
+## higher = more fair
+analytic_df = analytic_df %>%
+          mutate(id = 1:nrow(analytic_df),
+              degree_morefair= continuous_algofair_numeric - continuous_nonalgofair_numeric) 
+
+## algorithm scores
+analytic_df_algoscores = analytic_df %>%
+            dplyr::select(id, continuous_algofair) %>%
+            rename(continuous_rating= continuous_algofair) %>%
+            mutate(method_short = "Algorithm")
+
+analytic_df_otherscores = analytic_df %>%
+          dplyr::select(id, continuous_nonalgofair, method_short) %>%
+          rename(continuous_rating = continuous_nonalgofair)
+
+## combine
+analytic_df_bothscores = rbind.data.frame(analytic_df_algoscores,
+                                          analytic_df_otherscores)
+
+analytic_df_summariseratings = analytic_df_bothscores %>%
+              group_by(method_short, continuous_rating) %>%
+              summarise(count = n()) %>%
+              ungroup() %>%
+              mutate(rating_ordered = factor(continuous_rating,
+                                  levels = c("Extremely unfair", 
+                                             "Somewhat unfair",
+                                             "Neither fair nor unfair",
+                                             "Somewhat fair", 
+                                             "Extremely fair"),
+                                  ordered = TRUE)) %>%
+              left_join(analytic_df_bothscores %>% group_by(method_short) %>%
+                        summarise(count_group = n()), by = "method_short") %>%
+              mutate(prop_group = count/count_group)
+
+## distribution of ratings
+ggplot(analytic_df_summariseratings, aes(x = factor(rating_ordered),
+                                         y = prop_group,
+                                         fill = factor(method_short))) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  scale_fill_viridis(discrete = TRUE) +
+  theme_new(base_size = 18) +
+  ylab("Proportion of respondents\nwho chose category") +
+  theme(legend.position = c(0.8, 0.15),
+        legend.background = element_blank(),
+        legend.key.size = unit(1.2, "cm"))  +
+  xlab("") +
+  coord_flip() +
+  labs(fill = "") 
+
+ggsave("../output/continuous_ratings_descriptive.pdf",
+       plot = last_plot(),
+       device= "pdf",
+       width = 8,
+       height = 12)
+          
+
+## present higher by method
+analytic_df_longscores = analytic_df %>%
+                dplyr::select(contains("fair_numeric"),
+                              method_short, id) 
+  
+ggplot(analytic_df, aes(x = degree_morefair)) +
+  geom_histogram(bins = 5, fill = "wheat4", color = "black") +
+  facet_wrap(~method_short) +
+  scale_fill_viridis(discrete = TRUE) +
+  theme_new() +
+  coord_flip() 
+
+
+
+```
+
+
+## Summarize free responses
+
+
+```{r}
+fr_summary = analytic_df %>%
+            filter(method_short == "Counselor\njudgment" & 
+                  binary_morefair_descriptive == "Other method")
+        
+
+fr_summary$explain_fairness
+
+
+## 
+
+table(analytic_df$method_short)
+
+```
+
+
+## Adding new data
+
+
+```{r}
+
+
+
+
+```
