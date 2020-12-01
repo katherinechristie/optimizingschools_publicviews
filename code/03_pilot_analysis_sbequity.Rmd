@@ -1,0 +1,408 @@
+---
+title: "optschools_publicviews.Rmd"
+author: "Rebecca Johnson"
+date: "12/1/2020"
+output: html_document
+---
+
+## Load packages
+
+
+```{r}
+
+library(xlsx)
+library(dplyr)
+library(stringr)
+library(haven)
+library(ggplot2)
+library(tidyverse)
+library(data.table)
+library(viridis)
+library(kableExtra)
+library(qualtRics)
+library(car)
+
+theme_new <- function(base_size = 16, base_family = "Helvetica"){
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      panel.grid = element_blank(),   
+      panel.border = element_rect(fill = NA, colour = "black", size=1),
+      panel.background = element_rect(fill = "white", colour = "black"), 
+      strip.background = element_rect(fill = NA),
+      axis.text.x = element_text(color = "black"),
+      axis.text.y = element_text(color = "black")
+    )
+}
+
+
+```
+
+
+# Load and clean data
+
+```{r}
+
+# Load qualtrics data
+raw_data= read_survey("../data/Beliefs about funding models _rjrevis_December 1, 2020_11.06.csv")
+
+# Load prolific dem
+prol_dem = read.csv("../data/prolific_export_5fc0ff8b87f2d307d12a6324.csv")
+
+print(sprintf("Out of %s unique ids in prolific df, %s are found in qualtrics df",
+        length(unique(prol_dem$participant_id)),
+        length(intersect(unique(prol_dem$participant_id),
+                     unique(raw_data$prol_id)))))
+
+prol_notfound = setdiff(prol_dem$participant_id,
+                        raw_data$prol_id)
+
+prol_dem = prol_dem %>%
+        mutate(is_notfound = ifelse(participant_id %in% prol_notfound, TRUE, FALSE),
+               is_missing_completetime = ifelse(completed_date_time == "", TRUE, FALSE)) 
+
+## see that mostof the prolific not found are missing a complete day/time
+## but there's also 1 missing completedatetime who's found in qualtrics
+table(prol_dem$is_notfound, prol_dem$is_missing_completetime)
+
+## rename prolific cols to distinguish b/t qualtrics cols
+colnames(prol_dem) = sprintf("%s_prolific",
+                             colnames(prol_dem))
+
+
+
+# Create flags
+## from looking at labels:
+### [w/m]_rankfair_1 == lottery
+### [w/m]_rankfair_2 == fcfs
+### [w/m]_rankfair_3 == points
+### and then values within are ranking
+raw_data = raw_data %>%
+        mutate(is_prol_r = ifelse(grepl("^5", prol_id), 
+                                  TRUE, FALSE),
+               is_any_barriers = ifelse(Cond %in% c("Min", "Wom"), TRUE,
+                                  FALSE),
+                points_rank= case_when(
+                          !is.na(w_rankfair_3) ~ w_rankfair_3,
+                          !is.na(m_rankfair_3) ~ m_rankfair_3),
+                lottery_rank = case_when(
+                          !is.na(w_rankfair_1) ~ w_rankfair_1,
+                          !is.na(m_rankfair_1) ~ m_rankfair_1),
+                fcfs_rank = case_when(
+                          !is.na(w_rankfair_2) ~ w_rankfair_2,
+                          !is.na(m_rankfair_2) ~ m_rankfair_2),
+               ## reverse code points so that same direction as binary
+               points_rank_rev = 3-points_rank,
+                is_points_first = case_when(points_rank == 1 ~ TRUE, 
+                                        TRUE ~ FALSE)) 
+
+
+## left join prolific cols onto raw data
+raw_data_wp = merge(raw_data,
+                    prol_dem,
+                    by.x = "prol_id",
+                    by.y= "participant_id_prolific",
+                    all.x = TRUE)
+
+## construct flag for missing all free responses
+fr_cols = grep("fr\\_1$", colnames(raw_data_wp),
+               value = TRUE)
+raw_data_wp$is_missing_all_fr = ifelse(rowSums(is.na(raw_data_wp[, fr_cols])) ==
+                        length(fr_cols),
+                        TRUE, FALSE)
+
+## subset to analytic df
+analytic_df = raw_data_wp %>%
+          filter(is_prol_r) 
+
+## make colnames lowercase and remove spaces/punctuation
+colnames(analytic_df) = gsub("\\s+|\\(|\\)", 
+                             "", 
+                             tolower(colnames(analytic_df)))
+
+
+## for final version, need to go through 
+## and check force response logic; could also do 
+## speedy completion filter
+table(analytic_df$is_missing_all_fr)
+table(analytic_df$durationinseconds[analytic_df$is_missing_all_fr])
+
+## later: add coding of just-world scale
+
+
+
+```
+
+
+# Summarize descriptive stats
+
+
+```{r}
+
+# Distribution of duration across conditions
+## median duration is 6 minutes
+## slightly lower for the people who read about historical barriers
+quantile(analytic_df$durationinseconds)
+analytic_df %>%
+  group_by(is_any_barriers) %>%
+  summarise(quant = paste(quantile(durationinseconds),
+                      collapse = "; ")) 
+
+# Conditions
+table(analytic_df$cond)
+
+# Demographics
+dem_vars = c("employment.status_prolific",
+             "sex_prolific",
+             "first.language_prolific")
+
+lapply(analytic_df[, dem_vars],
+       function(x) table(x)) 
+
+## skews younger
+ggplot(analytic_df, aes(x = age_prolific)) +
+  geom_density() 
+
+
+
+```
+
+## Check free response display logics
+
+
+```{r}
+
+rank_cols = grep("\\_rank$", colnames(analytic_df),
+                 value = TRUE) 
+
+
+check_logic <- function(one_fr){
+  
+  ## first filter to those who filled out the fr
+  fill_resp = analytic_df %>%
+          filter(!is.na(!!sym(one_fr)))
+  
+  ## then, what the first choice should be
+  choices = unlist(strsplit(gsub("\\_fr\\_1", "", one_fr),
+                     split = ""))
+  first = choices[1]
+  second = choices[2]
+  
+  ## make sure rank matches choices
+  ### first 
+  if((first == "p" & all(fill_resp$points_rank == 1)) |
+     (first == "f" & all(fill_resp$fcfs_rank == 1)) |
+     (first == "l" & all(fill_resp$lottery_rank == 1))){
+    print(sprintf("passed first choice for: %s",
+                  one_fr))
+  } else{
+    print(sprintf("failed first choice for: %s",
+                  one_fr))
+  }
+  
+  ### second
+  if((second == "p" & all(fill_resp$points_rank == 2)) |
+     (second == "f" & all(fill_resp$fcfs_rank == 2)) |
+     (second == "l" & all(fill_resp$lottery_rank == 2))){
+    print(sprintf("passed second choice for: %s",
+                  one_fr))
+  } else{
+    print(sprintf("failed second choice for: %s",
+                  one_fr))
+  }
+  return(NULL)
+  
+}
+
+checking <- lapply(fr_cols, check_logic)
+
+```
+
+# Descriptives on outcome
+
+```{r}
+## first, show raw distribution of ranks
+ggplot(analytic_df, aes(x = points_rank,
+                        group = cond,
+                        fill = cond)) +
+  geom_histogram(bins = 3, position = "dodge") +
+  theme_new() +
+  scale_fill_viridis(discrete = TRUE) +
+  xlab("Ranking of points system (1 = first; 3 = last)") +
+  theme(legend.position = c(0.7, 0.7)) +
+  labs(fill = "")
+
+## since uneven counts between any barriers and 
+## no barriers, get proportions
+prop_choose = analytic_df %>%
+        group_by(points_rank, is_any_barriers) %>%
+        summarise(num = n()) %>%
+        left_join(analytic_df %>%
+                group_by(is_any_barriers) %>%
+                summarise(denom = n())) %>%
+        mutate(prop_choose = num/denom) %>%
+        ungroup() 
+
+ggplot(prop_choose, aes(x = points_rank,
+                        y = prop_choose,
+                        group = is_any_barriers,
+                        fill = is_any_barriers)) +
+  geom_bar(stat = "identity",
+           position = "dodge") +
+  theme_new() +
+  scale_fill_viridis(discrete = TRUE) +
+  xlab("Ranking of points system (1 = first; 3 = last)") +
+  theme(legend.position = c(0.7, 0.7)) +
+  labs(fill = "Any barriers info?") 
+
+
+## timing distribution needs more cleaning but 
+## here's one for most frequent rank of points then first come first served
+## seems like threshold is 2 weeks 
+lapply(analytic_df[, fr_cols], function(x) sum(!is.na(x)))
+table(analytic_df$pf_time)
+
+```
+
+
+# Analytic
+
+## Hyp 1: barriers tx causes (1) higher ranking of points system (lower rank) and (2) higher likelihood of ranking points first
+
+```{r}
+## continuous regressing rank of points
+## reverse coded so that pos coef = rank higher
+summary(lm(points_rank_rev ~ is_any_barriers,
+           data = analytic_df))
+
+## binary regressing points as first
+## use lpm
+summary(lm(is_points_first ~ is_any_barriers,
+           data = analytic_df))
+
+
+```
+
+## Hyp 2: differences between minority and women
+
+### One way to analyze (simpler to explain/interpret)
+
+1. Filter to respondents randomized to those two
+2. Reg is comparing those two
+
+
+```{r}
+
+## when women is the tx, slightly more likely
+## to rank points higher/first than when minority is tx
+summary(lm(points_rank_rev ~ cond,
+           data = analytic_df %>%
+             filter(cond != "No_info")))
+
+summary(lm(is_points_first ~ cond,
+           data = analytic_df %>%
+             filter(cond != "No_info")))
+
+
+```
+
+### A second way to analyze (recommend less)
+
+1. Keep all respondents
+2. Create dummy indicators for women barriers (compared to neither or min),
+minority barriers (compared to neither or wom)
+3. Use linear hypothesis test of whether coef on female == coef on minority
+
+
+```{r}
+analytic_df = analytic_df %>%
+          mutate(wom_binary = ifelse(cond == "Wom", TRUE, FALSE),
+                 min_binary = ifelse(cond == "Min", TRUE, FALSE))  
+
+
+cont_compare = lm(points_rank_rev ~ wom_binary + min_binary,
+           data = analytic_df)
+summary(cont_compare)
+linearHypothesis(cont_compare, c("wom_binaryTRUE" = "min_binaryTRUE"))
+
+# etc
+
+
+
+```
+
+
+## Hyp 3: interaction b/t respondent demographics and treatment
+
+Interact condition and attribute; coef of interest is between barriers treatment
+and having that demographic coefficient (eg whether barriers tx is more effective
+if you're a female; similar for minority)
+
+```{r}
+## create female binary if not equal to female (so includes one data expired + male)
+
+analytic_df = analytic_df %>%
+          mutate(is_female = ifelse(sex_prolific == "Female", TRUE, 
+                                    FALSE)) 
+
+summary(lm(points_rank_rev ~ cond*is_female,
+           data = analytic_df))
+
+
+
+```
+
+
+## Hyp 4: something on timing?
+
+
+## Hyp 5: something with just world or other predictors?
+
+
+# Consolidate free responses so easier to read through
+
+
+```{r}
+
+## names of other free responses
+fr_2_cols = grep("fr\\_2$", colnames(analytic_df),
+                 value = TRUE)
+outcomes = grep("\\_outcomes$", colnames(analytic_df),
+                value = TRUE)
+
+## replace NA with "" for those cols 
+analytic_df_tocat = analytic_df
+analytic_df_tocat[, c(fr_cols, 
+                fr_2_cols,
+                outcomes)][is.na(analytic_df_tocat[, c(fr_cols, 
+                fr_2_cols,
+                outcomes)])] <- ""
+
+## paste row-wise
+analytic_df_tocat$fr_why_first_over_second = apply(analytic_df_tocat[, fr_cols], 1,
+             function(x) paste(x, collapse = "")) 
+analytic_df_tocat$fr_why_second_over_third = apply(analytic_df_tocat[, fr_2_cols], 1,
+             function(x) paste(x, collapse = "")) 
+analytic_df_tocat$fr_group_helped = apply(analytic_df_tocat[, outcomes], 1,
+             function(x) paste(x, collapse = "")) 
+
+## get key variables
+analytic_df_tocat_towrite = analytic_df_tocat %>%
+                select(cond, 
+                       sex_prolific,
+                       points_rank,
+                       fcfs_rank,
+                       lottery_rank,
+                       contains("why"), fr_group_helped) %>%
+            arrange(points_rank, fcfs_rank, cond) 
+
+```
+
+## Print
+
+```{r, results = 'asis'}
+analytic_df_tocat_towrite %>%
+  kable() %>%
+  kable_styling() 
+
+
+```
