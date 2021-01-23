@@ -3,13 +3,15 @@ title: "Final analysis code"
 author: "Heather Kappes, Crystal Hall, Rebecca Johnson, Simone Zhang"
 date: "01/06/2020"
 output:
+  pdf_document:
+    toc: yes
   html_document:
     toc: yes
     number_sections: yes
-  pdf_document:
-    toc: yes
   word_document:
     toc: yes
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Load packages and setup
@@ -49,6 +51,7 @@ theme_new <- function(base_size = 16, base_family = "Helvetica"){
 code_agg_scales <- function(data, prefix_string,
                             verbose = FALSE,
                             FUN){
+  
   
   ## get all columns with that prefix
   cols_withprefix = grep(sprintf("^%s", prefix_string),
@@ -113,7 +116,7 @@ prol_notfound = setdiff(prol_dem$participant_id,
 
 ### people in qualtrics but not found in prolific dem
 insurvey_notprol = setdiff(raw_data$prol_id_clean,
-                           prol_dem$participant_id_prolific)
+                           prol_dem$participant_id)
 
 ### clean up prol id in qualtrics to try to match with prol dem
 raw_data = raw_data %>%
@@ -158,6 +161,16 @@ raw_data_wp = merge(raw_data,
 colnames(raw_data_wp) = gsub("\\s+|\\(|\\)", 
                              "", 
                              tolower(colnames(raw_data_wp)))
+
+# Inspect the unmerged observations with no match in the prolific data
+# Results in 22 observations that don't merge 
+table(raw_data_wp$is_failmerge_prol, useNA = "always") 
+
+raw_data_wp_unmatched = raw_data_wp %>%
+  filter(is_failmerge_prol)
+
+table(raw_data_wp_unmatched$is_prolid_wronglength, useNA = "always")
+
 ```
 
 
@@ -191,18 +204,18 @@ raw_data_wp$choice = gsub("\\_fr_1",
 ### [w/m]_rankfair_2 == fcfs
 ### [w/m]_rankfair_3 == points
 ### and then values within are ranking
-raw_data_wp_cleanvar = raw_data_wp %>%
-  
+raw_data_wp_intermed = raw_data_wp %>%
   ### renaming attention check item in jw scale
   ### so that it's actually the attention and  doesnt get aggregated
         rename(attention_check_q = jw_scale_6,
               political_ideology = q34,
               political_affil= q35,
-              what_researchers_want = q37) %>%
-  
+              what_researchers_want = q37)
+
+raw_data_wp_cleanvar = raw_data_wp_intermed %>%
         ### various screening
-        mutate(is_failattention = case_when(!grepl("Strong agreement", attention_check_q) ~ TRUE, 
-                                            is.na(attention_check_q) ~ NA,
+        mutate(is_failattention = case_when(is.na(attention_check_q) ~ NA,
+                                            !grepl("Strong agreement", attention_check_q) ~ TRUE, 
                                             TRUE ~ FALSE),
                is_wrong_distype = case_when(distributionchannel != "anonymous" ~ TRUE, 
                                             TRUE ~ FALSE),
@@ -252,15 +265,15 @@ raw_data_wp_cleanvar = raw_data_wp %>%
               ### items but complete others, coded using num/denom
               ### with remaining items
               ### gives warning since codes to NA for those missing all items
-              jw_combined = code_agg_scales(raw_data_wp,
+              jw_combined = code_agg_scales(raw_data_wp_intermed,
                             prefix_string = "jw_scale",
                             FUN = function(x){
-                            case_when(grepl("agreement", x) ~ 6,
-                                      grepl("disagreement", x) ~ 1,
+                            case_when(grepl("disagreement", x) ~ 1,
+                                      grepl("agreement", x) ~ 6,
                                       TRUE ~ as.numeric(x))}),
         
               ### create numeric version of political ideology scale
-              ### with NA for "prefer not to say" and "mid"
+              ### with NA for "prefer not to say" and "not sure"
               ### not using numeric analytically just for descriptive
               ### higher = more conservative
               political_ideology_numeric = case_when(grepl("Very Conserv", political_ideology) ~ 5,
@@ -271,19 +284,20 @@ raw_data_wp_cleanvar = raw_data_wp %>%
                                                      TRUE ~ NA_real_),
               
               ### various flags      
-              is_woman = ifelse(sex_prolific == "Female",
-                                 TRUE, FALSE),
+              is_woman = case_when(sex_prolific == "Female" ~ TRUE,
+                                   sex_prolific == "Male" ~ FALSE,  
+                                   TRUE ~ NA),
         
               ### primary definition of minority is non-white
-              is_minority = ifelse(!raceeth %in% 
-                                c("White",
-                                  "Prefer not to say",
-                                  "White, Prefer not to say"), TRUE, FALSE),
+              is_minority = case_when(is.na(raceeth) ~ NA,
+                                      !raceeth %in% c("White", "Prefer not to say", "White, Prefer not to say") ~ TRUE, 
+                                      TRUE ~ FALSE),
               
               ### secondary definition is only hispanic or black
               ### for both can select multiple
-               is_minority_sec = ifelse(grepl("Hispanic|Black",
-                    raceeth), TRUE, FALSE),
+              is_minority_sec = case_when(is.na(raceeth) ~ NA,
+                                          grepl("Hispanic|Black", raceeth) ~ TRUE, 
+                                          TRUE ~ FALSE),
                
               ### group into broader categories
               ### mainly comparing D, R, I
@@ -294,7 +308,12 @@ raw_data_wp_cleanvar = raw_data_wp %>%
                 is.na(political_affil) ~ "Other", # include skips in others 
                  TRUE ~ political_affil)) 
             
+# Review flags 
+table(raw_data_wp_intermed$political_affil, useNA = "always")
+table(raw_data_wp_cleanvar$political_affil_buckets, useNA = "always")
 
+temp <- raw_data_wp_cleanvar %>%
+  select(contains("jw"))
 ```
 
 ## Load free responses answers and reviewer-confirmed nonsensical 
@@ -325,7 +344,17 @@ stopifnot(sum(raw_data_wp_cleanvar$is_points_first,
               na.rm = TRUE) == 
           nrow(raw_data_wp_cleanvar %>% filter(points_rank == 1)))
 
+# Identify any additional exact duplicates 
+exact_duplicates = fr_coded_both %>%
+  group_by(fr_why_first_over_second) %>%
+  filter(n() > 1)
+
+# 3 additional observations that are duplicates that were not flagged by RA review
+exact_duplicates$prol_id[!exact_duplicates$prol_id %in% nonsens_prol]
+  
 ```
+
+There were 3 additional observations that were duplicates that were not flagged by RA review. 
 
 # Summarize descriptive stats
 
@@ -424,10 +453,10 @@ dem_vars = c("sex_prolific",
 model_df = raw_data_wp_cleanvar %>%
         filter(!is_nonsens_answer & !is_cons_revok &
               !is_missing_DV &
-              !is_failattention &
+              (!(is_failattention | is.na(is_failattention))) &
               !is_wrong_distype &
               !is_failmerge_prol &
-              !is_prolid_wronglength &
+              (!(is_prolid_wronglength | is.na(is_prolid_wronglength))) &
               !is_non100_progress)
 
 ## print n fail each filter (n filtered out is < sum due to overlap)
@@ -437,8 +466,9 @@ lapply(raw_data_wp_cleanvar[, c("is_nonsens_answer",
                                      "is_failattention",
                                      "is_wrong_distype",
                                      "is_failmerge_prol",
-                                     "is_prolid_wronglength")],
-                        function(x) table(x))
+                                     "is_prolid_wronglength",
+                                     "is_non100_progress")],
+                        function(x) table(x, useNA = "always"))
 sprintf("Once we filter, goes from %s to %s",
         nrow(raw_data_wp_cleanvar),
         nrow(model_df))
@@ -838,7 +868,6 @@ ggsave("../output/jap_paper/figs/jw_prediction.png",
 
 
 ### Political affiliation
-
 
 ```{r}
 summary(lm(points_rank_rev ~ is_any_barriers*relevel(factor(political_affil_buckets),
