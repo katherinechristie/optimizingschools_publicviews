@@ -162,15 +162,6 @@ colnames(raw_data_wp) = gsub("\\s+|\\(|\\)",
                              "", 
                              tolower(colnames(raw_data_wp)))
 
-# Inspect the unmerged observations with no match in the prolific data
-# Results in 22 observations that don't merge 
-table(raw_data_wp$is_failmerge_prol, useNA = "always") 
-
-raw_data_wp_unmatched = raw_data_wp %>%
-  filter(is_failmerge_prol)
-
-table(raw_data_wp_unmatched$is_prolid_wronglength, useNA = "always")
-
 ```
 
 
@@ -307,13 +298,7 @@ raw_data_wp_cleanvar = raw_data_wp_intermed %>%
                               "Prefer not to say") |
                 is.na(political_affil) ~ "Other", # include skips in others 
                  TRUE ~ political_affil)) 
-            
-# Review flags 
-table(raw_data_wp_intermed$political_affil, useNA = "always")
-table(raw_data_wp_cleanvar$political_affil_buckets, useNA = "always")
 
-temp <- raw_data_wp_cleanvar %>%
-  select(contains("jw"))
 ```
 
 ## Load free responses answers and reviewer-confirmed nonsensical 
