@@ -3,11 +3,11 @@ title: "Final analysis code"
 author: "Heather Kappes, Crystal Hall, Rebecca Johnson, Simone Zhang"
 date: "01/06/2020"
 output:
-  pdf_document:
-    toc: yes
   html_document:
     toc: yes
     number_sections: yes
+  pdf_document:
+    toc: yes
   word_document:
     toc: yes
 editor_options: 
@@ -336,6 +336,11 @@ exact_duplicates = fr_coded_both %>%
 
 # 3 additional observations that are duplicates that were not flagged by RA review
 exact_duplicates$prol_id[!exact_duplicates$prol_id %in% nonsens_prol]
+
+## add flag for those exact duplicates
+raw_data_wp_cleanvar = raw_data_wp_cleanvar %>%
+          mutate(is_exact_dup_fr = ifelse(prol_id_clean %in% 
+                                    exact_duplicates$prol_id, TRUE, FALSE))
   
 ```
 
@@ -442,7 +447,8 @@ model_df = raw_data_wp_cleanvar %>%
               !is_wrong_distype &
               !is_failmerge_prol &
               (!(is_prolid_wronglength | is.na(is_prolid_wronglength))) &
-              !is_non100_progress)
+              !is_non100_progress &
+              !is_exact_dup_fr) # adding exact duplicate
 
 ## print n fail each filter (n filtered out is < sum due to overlap)
 lapply(raw_data_wp_cleanvar[, c("is_nonsens_answer",
@@ -452,7 +458,8 @@ lapply(raw_data_wp_cleanvar[, c("is_nonsens_answer",
                                      "is_wrong_distype",
                                      "is_failmerge_prol",
                                      "is_prolid_wronglength",
-                                     "is_non100_progress")],
+                                     "is_non100_progress",
+                                      "is_exact_dup_fr")],
                         function(x) table(x, useNA = "always"))
 sprintf("Once we filter, goes from %s to %s",
         nrow(raw_data_wp_cleanvar),
@@ -675,7 +682,18 @@ ggsave("../output/jap_paper/figs/among_points_timedist.png",
 
 ```
 
+## Distribution of values for main items
 
+```{r}
+summary(model_df$jw_combined)
+sd(model_df$jw_combined)
+
+
+table(model_df$political_ideology)
+table(model_df$political_affil_buckets)
+table(model_df$political_affil)
+
+```
 # Analytic
 
 ## Hyp 1: barriers tx causes (1) higher ranking of points system (lower rank) and (2) higher likelihood of ranking points first
@@ -804,10 +822,14 @@ summary(lm(is_points_first ~ is_any_barriers*jw_combined,
 points_rank_lm_jw = lm(points_rank ~ is_any_barriers*jw_combined,
                        data = model_df)
 
+### doing from top 5% to top 95% of jw scale
+### 
 predict_jw_df = data.frame(is_any_barriers = rep(c(TRUE, FALSE),
                                                  each = 100),
-                           jw_combined = rep(seq(from = min(model_df$jw_combined),
-                                                 to = max(model_df$jw_combined),
+                           jw_combined = rep(seq(from = quantile(model_df$jw_combined,
+                                                              probs = 0.05),
+                                                 to = quantile(model_df$jw_combined,
+                                                              probs = 0.95),
                                                  length.out = 100), 
                                              2)) 
 
@@ -837,7 +859,7 @@ jw_prediction_graph = ggplot(predicted_rank_4graph, aes(x = jw_combined, y = est
         legend.background = element_blank()) +
   xlab("Just world scale\n(higher = more belief in just world)") +
   ylab("Predicted ranking of points system\nrelative to lottery and first-come first-served\n(lower = rank first)") +
-  ylim(1, 2.5) +
+  ylim(0.8, 2.8) +
   labs(fill = "Any barriers\ninfo?",
        color = "Any barriers\ninfo?")
 
