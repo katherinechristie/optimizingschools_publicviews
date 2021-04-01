@@ -1,21 +1,45 @@
 # power analysis
 
 # Load packages
+library(tidyverse)
 library(DeclareDesign)
 library(fabricatr)
 library(randomizr)
 library(estimatr)
 library(DesignLibrary)
 
+# 
 factorial_designer(
   N = 256,
   k = 3,
   outcome_means = rep(0, 2^k),
   sd = 1,
   outcome_sds = rep(sd, 2^k),
-  assignment_probs = rep(0.5, k),
+  assignment_probs = rep(1/3, k),
   outcome_name = "Y",
   treatment_names = NULL,
   args_to_fix = NULL
 )
+
+design <- 
+declare_population(N = 200) +
+  declare_potential_outcomes(Y_Z_T1 = rbinom(N, 1, 0.1),
+                             Y_Z_T2 = rbinom(N, 1, 0.2),
+                             Y_Z_T3 = rbinom(N, 1, 0.3),
+                             Y_Z_T4 = rbinom(N, 1, 0.4),
+                             Y_Z_T5 = rbinom(N, 1, 0.5),
+                             Y_Z_T6 = rbinom(N, 1, 0.6),
+                             Y_Z_T7 = rbinom(N, 1, 0.7),
+                             Y_Z_T8 = rbinom(N, 1, 0.8)) +
+  declare_assignment(num_arms = 8) +
+  declare_reveal(Y, Z) +
+  declare_step(
+    Z1 = as.numeric(Z %in% c("T1", "T2", "T3", "T4")),
+    Z2 = as.numeric(Z %in% c("T5", "T6", "T7", "T8")),
+    Z3 = as.numeric(Z %in% c("T9", "T10", "T11", "T12")),
+    handler = fabricate
+  ) +
+  declare_estimator(Y ~ Z1 + Z2 + Z3, term = TRUE, model = lm_robust)
+
+run_design(design)
 
